@@ -9,10 +9,10 @@
 #include <AP_HAL/utility/OwnPtr.h>
 
 #ifndef HAL_BARO_BMP280_I2C_ADDR
- #define HAL_BARO_BMP280_I2C_ADDR  (0x76)
+#define HAL_BARO_BMP280_I2C_ADDR (0x76)
 #endif
 #ifndef HAL_BARO_BMP280_I2C_ADDR2
- #define HAL_BARO_BMP280_I2C_ADDR2 (0x77)
+#define HAL_BARO_BMP280_I2C_ADDR2 (0x77)
 #endif
 
 class AP_Baro_BMP280 : public AP_Baro_Backend
@@ -26,11 +26,12 @@ public:
     static AP_Baro_Backend *probe(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev);
 
 private:
-
     bool _init(void);
     void _timer(void);
     void _update_temperature(int32_t);
     void _update_pressure(int32_t);
+    /* ADDED */
+    void _update_humidity(int32_t hum_raw)
 
     AP_HAL::OwnPtr<AP_HAL::Device> _dev;
 
@@ -40,9 +41,15 @@ private:
     uint32_t _pressure_count;
     float _temperature;
 
+    /* ADDED */
+    uint8_t _h1, _h3;
+    int16_t _h2, _h4, _h5;
+    int8_t _h6;
+    float _humidity;
+
     // Internal calibration registers
     int16_t _t2, _t3, _p2, _p3, _p4, _p5, _p6, _p7, _p8, _p9;
     uint16_t _t1, _p1;
 };
 
-#endif  // AP_BARO_BMP280_ENABLED
+#endif // AP_BARO_BMP280_ENABLED

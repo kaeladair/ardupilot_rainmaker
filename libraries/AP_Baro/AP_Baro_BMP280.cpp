@@ -21,56 +21,83 @@
 
 extern const AP_HAL::HAL &hal;
 
-#define BMP280_MODE_SLEEP  0
+#define BMP280_MODE_SLEEP 0
 #define BMP280_MODE_FORCED 1
 #define BMP280_MODE_NORMAL 3
 #define BMP280_MODE BMP280_MODE_NORMAL
 
-#define BMP280_OVERSAMPLING_1  1
-#define BMP280_OVERSAMPLING_2  2
-#define BMP280_OVERSAMPLING_4  3
-#define BMP280_OVERSAMPLING_8  4
+#define BMP280_OVERSAMPLING_1 1
+#define BMP280_OVERSAMPLING_2 2
+#define BMP280_OVERSAMPLING_4 3
+#define BMP280_OVERSAMPLING_8 4
 #define BMP280_OVERSAMPLING_16 5
 #define BMP280_OVERSAMPLING_P BMP280_OVERSAMPLING_16
 #define BMP280_OVERSAMPLING_T BMP280_OVERSAMPLING_2
 
 #define BMP280_FILTER_COEFFICIENT 2
 
-#define BMP280_ID            0x58
-#define BME280_ID            0x60
+#define BMP280_ID 0x58
+#define BME280_ID 0x60
+/* ADDED */
+#define BME280_REG_HUM_CALIB 0x88
+#define BME280_REG_CTRL_HUM 0xF2
+#define BME280_REG_HUMIDITY 0xFD
 
-#define BMP280_REG_CALIB     0x88
-#define BMP280_REG_ID        0xD0
-#define BMP280_REG_RESET     0xE0
-#define BMP280_REG_STATUS    0xF3
+#define BMP280_REG_CALIB 0x88
+#define BMP280_REG_ID 0xD0
+#define BMP280_REG_RESET 0xE0
+#define BMP280_REG_STATUS 0xF3
 #define BMP280_REG_CTRL_MEAS 0xF4
-#define BMP280_REG_CONFIG    0xF5
-#define BMP280_REG_DATA      0xF7
+#define BMP280_REG_CONFIG 0xF5
+#define BMP280_REG_DATA 0xF7
 
+/* ADDED */
 AP_Baro_BMP280::AP_Baro_BMP280(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev)
-    : AP_Baro_Backend(baro)
-    , _dev(std::move(dev))
+    : AP_Baro_Backend(baro), _dev(std::move(dev)), _humidity(0.0f)
 {
 }
 
 AP_Baro_Backend *AP_Baro_BMP280::probe(AP_Baro &baro,
                                        AP_HAL::OwnPtr<AP_HAL::Device> dev)
 {
-    if (!dev) {
+    if (!dev)
+    {
         return nullptr;
     }
 
     AP_Baro_BMP280 *sensor = new AP_Baro_BMP280(baro, std::move(dev));
-    if (!sensor || !sensor->_init()) {
+    if (!sensor || !sensor->_init())
+    {
         delete sensor;
         return nullptr;
     }
     return sensor;
 }
 
+void AP_Baro_BMP280::_update_humidity(int32_t hum_raw)
+{
+    int32_t v_x1_u32r = (_t_fine - ((int32_t)76800));
+    v_x1_u32r = (((((hum_raw << 14) - (((int32_t)_h4) << 20) - (((int32_t)_h5) * v_x1_u32r)) +
+                   ((int32_t)16384)) >>
+                  15) *
+                 (((((((v_x1_u32r * ((int32_t)_h6)) >> 10) *
+                      (((v_x1_u32r * ((int32_t)_h3)) >> 11) + ((int32_t)32768))) >>
+                     10) +
+                    ((int32_t)2097152)) *
+                       ((int32_t)_h2) +
+                   8192) >>
+                  14));
+    v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) * ((int32_t)_h1)) >> 4));
+    v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
+    v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
+    float humidity = (v_x1_u32r >> 12) / 1024.0f;
+    _humidity = humidity;
+}
+
 bool AP_Baro_BMP280::_init()
 {
-    if (!_dev) {
+    if (!_dev)
+    {
         return false;
     }
     WITH_SEMAPHORE(_dev->get_semaphore());
@@ -78,10 +105,24 @@ bool AP_Baro_BMP280::_init()
     _dev->set_speed(AP_HAL::Device::SPEED_HIGH);
 
     uint8_t whoami;
-    if (!_dev->read_registers(BMP280_REG_ID, &whoami, 1)  ||
-        (whoami != BME280_ID && whoami != BMP280_ID)) {
+    if (!_dev->read_registers(BMP280_REG_ID, &whoami, 1) ||
+        (whoami != BME280_ID && whoami != BMP280_ID))
+    {
         // not a BMP280 or BME280
         return false;
+    }
+
+    /* ADDED */
+    if (whoami == BME280_ID)
+    {
+        uint8_t h_calib[7];
+        _dev->read_registers(BME280_REG_HUM_CALIB, h_calib, sizeof(h_calib));
+        _h1 = h_calib[0];
+        _h2 = (int16_t)((h_calib[2] << 8) | h_calib[1]);
+        _h3 = h_calib[3];
+        _h4 = (int16_t)((h_calib[4] << 4) | (h_calib[5] & 0x0F));
+        _h5 = (int16_t)((h_calib[5] >> 4) | (h_calib[6] << 4));
+        _h6 = (int8_t)h_calib[7];
     }
 
     // read the calibration data
@@ -103,14 +144,14 @@ bool AP_Baro_BMP280::_init()
 
     // SPI write needs bit mask
     uint8_t mask = 0xFF;
-    if (_dev->bus_type() == AP_HAL::Device::BUS_TYPE_SPI) {
+    if (_dev->bus_type() == AP_HAL::Device::BUS_TYPE_SPI)
+    {
         mask = 0x7F;
     }
 
     _dev->setup_checked_registers(2, 20);
-    
-    _dev->write_register((BMP280_REG_CTRL_MEAS & mask), (BMP280_OVERSAMPLING_T << 5) |
-                         (BMP280_OVERSAMPLING_P << 2) | BMP280_MODE, true);
+
+    _dev->write_register((BMP280_REG_CTRL_MEAS & mask), (BMP280_OVERSAMPLING_T << 5) | (BMP280_OVERSAMPLING_P << 2) | BMP280_MODE, true);
 
     _dev->write_register((BMP280_REG_CONFIG & mask), BMP280_FILTER_COEFFICIENT << 2, true);
 
@@ -118,38 +159,56 @@ bool AP_Baro_BMP280::_init()
 
     _dev->set_device_type(DEVTYPE_BARO_BMP280);
     set_bus_id(_instance, _dev->get_bus_id());
-    
+
     // request 50Hz update
     _dev->register_periodic_callback(20 * AP_USEC_PER_MSEC, FUNCTOR_BIND_MEMBER(&AP_Baro_BMP280::_timer, void));
 
     return true;
 }
 
-
-
 //  accumulate a new sensor reading
+// void AP_Baro_BMP280::_timer(void)
+// {
+//     uint8_t buf[6];
+
+//     _dev->read_registers(BMP280_REG_DATA, buf, sizeof(buf));
+
+//     _update_temperature((buf[3] << 12) | (buf[4] << 4) | (buf[5] >> 4));
+//     _update_pressure((buf[0] << 12) | (buf[1] << 4) | (buf[2] >> 4));
+
+//     _dev->check_next_register();
+// }
+
+/* ADDED */
 void AP_Baro_BMP280::_timer(void)
 {
-    uint8_t buf[6];
-
+    uint8_t buf[8];
     _dev->read_registers(BMP280_REG_DATA, buf, sizeof(buf));
-
     _update_temperature((buf[3] << 12) | (buf[4] << 4) | (buf[5] >> 4));
     _update_pressure((buf[0] << 12) | (buf[1] << 4) | (buf[2] >> 4));
-
+    if (_dev->get_id() == BME280_ID)
+    {
+        _update_humidity((buf[6] << 8) | buf[7]);
+    }
     _dev->check_next_register();
 }
 
 // transfer data to the frontend
+/* ADDED */
 void AP_Baro_BMP280::update(void)
 {
     WITH_SEMAPHORE(_sem);
 
-    if (_pressure_count == 0) {
+    if (_pressure_count == 0)
+    {
         return;
     }
 
-    _copy_to_frontend(_instance, _pressure_sum/_pressure_count, _temperature);
+    _copy_to_frontend(_instance, _pressure_sum / _pressure_count, _temperature);
+    if (_dev->get_id() == BME280_ID)
+    {
+        _frontend.set_humidity(_instance, _humidity);
+    }
     _pressure_count = 0;
     _pressure_sum = 0;
 }
@@ -168,7 +227,7 @@ void AP_Baro_BMP280::_update_temperature(int32_t temp_raw)
     const float temp = ((float)t) * 0.01f;
 
     WITH_SEMAPHORE(_sem);
-    
+
     _temperature = temp;
 }
 
@@ -185,7 +244,8 @@ void AP_Baro_BMP280::_update_pressure(int32_t press_raw)
     var1 = ((var1 * var1 * (int64_t)_p3) >> 8) + ((var1 * (int64_t)_p2) << 12);
     var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)_p1) >> 33;
 
-    if (var1 == 0) {
+    if (var1 == 0)
+    {
         return;
     }
 
@@ -195,16 +255,16 @@ void AP_Baro_BMP280::_update_pressure(int32_t press_raw)
     var2 = (((int64_t)_p8) * p) >> 19;
     p = ((p + var1 + var2) >> 8) + (((int64_t)_p7) << 4);
 
-
     const float press = (float)p / 256.0f;
-    if (!pressure_ok(press)) {
+    if (!pressure_ok(press))
+    {
         return;
     }
-    
+
     WITH_SEMAPHORE(_sem);
-    
+
     _pressure_sum += press;
     _pressure_count++;
 }
 
-#endif  // AP_BARO_BMP280_ENABLED
+#endif // AP_BARO_BMP280_ENABLED
